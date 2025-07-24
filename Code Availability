@@ -1,0 +1,212 @@
+### Data filtering
+doubScores <- addDoubletScores(input = ArrowFiles,k=10,knnMethod = "UMAP",LSIMethod = 1)
+projLiver2 <- ArchRProject(ArrowFiles = ArrowFiles,outputDirectory="Liver",copyArrows=TRUE)
+saveArchRProject(ArchRProj = projLiver2, outputDirectory = "Liver", load = T)
+
+projLiver2 <- filterDoublets(projLiver2,filterRatio = 8)
+
+### marker genes accessibility plot
+gene <- "Clec4f"
+df2 <- aggregate(df$Clec4f, by=list(type=df$Sample,df$group),mean)######
+pbar <- ggplot(df2,aes(Group.2,x))+
+# 添加柱
+stat_summary(mapping=aes(fill = Group.2),fun=mean,geom = "bar",fun.args = list(mult=1),width=0.7)+
+# 添加误差线
+stat_summary(fun.data=mean_sdl,fun.args = list(mult=1),geom="errorbar",width=0.2)+
+#添加t-test检验
+stat_compare_means(comparisons = my_comparisons,method = "t.test",label = "p.forma",bracket.size = 0.5,size = 5)+
+# 添加x，y轴名
+labs(x = "",y = gene)+
+# 坐标轴延伸，确保图形元素覆盖至坐标
+theme_classic()+scale_fill_manual(values = c("#778ba6","#02639e"))+
+# 设置主题
+geom_jitter(data = df2,aes(Group.2,x,group = "type"),color = "#636363",width = 0.1, height = 0.1,alpha = 0.5)+
+theme(panel.background=element_rect(fill="white",colour="black",size=0.25), # 填充框内主题颜色，边框颜色和边框线条粗细
+axis.line=element_line(colour="black",size=0.25), # x,y轴颜色，粗细
+axis.title=element_text(size=13,color="black"), # x,y轴名设置
+axis.text = element_text(size=12,color="black"), # x,y轴文本设置
+legend.position="none"
+)
+options(repr.plot.width=4,repr.plot.height=6)
+pbar
+
+####correlation calculation
+#Liver12_1009_GeneScoreMatrix_avgPctMat_Sample.rds
+markerList <- getMarkers(samplemarker, cutOff = "FDR <= 0.01 & Log2FC >= 0.25")
+geneidx <- do.call(rbind,markerList)
+avgPctMatsample2 <- dcast(avgPctMatsample,feature ~ grp,value.var = "avgExpr")
+rownames(avgPctMatsample2) <- avgPctMatsample2$feature
+avgPctMatsample2 <- avgPctMatsample2[geneidx$name,]
+avgPctMatsample2 <- avgPctMatsample2[,-1]
+
+#### Differential accessibility peaks
+markersPeaks2 <- getMarkerFeatures(
+    ArchRProj = projI_L_2,
+    useMatrix = "PeakMatrix",
+    groupBy = "Anno_sub",
+  bias = c("TSSEnrichment", "log10(nFrags)"),
+  testMethod = "wilcoxon"
+)
+markerList <- getMarkers(markersPeaks, cutOff = "FDR <= 0.01 & Log2FC >= 1")
+heatmapPeaks <- markerHeatmap(
+  seMarker = markersPeaks[,c("Hep1","Hep2","Hep3","Hep4","Hep5","Hep6","Hep7","Hep8","Hep9")], 
+  cutOff = "FDR <= 0.1 & Log2FC >= 1",
+  transpose = TRUE,
+  plotLog2FC = FALSE,
+  scaleRows = TRUE,
+  binaryClusterRows = TRUE,
+  clusterCols = FALSE,
+  labelRows = FALSE,
+  pal = colorRampPalette(colors = c("#2fa1dd", "white", "#f87669"))(100)
+)
+options(repr.plot.width=8,repr.plot.height=6)
+draw(heatmapPeaks, heatmap_legend_side = "bot", show_annotation_legend = FALSE)
+
+####motif enrichment
+enrichMotifs <- peakAnnoEnrichment(
+    seMarker = markersPeaks[,c("Hep1","Hep2","Hep3","Hep4","Hep5","Hep6","Hep7","Hep8","Hep9")],
+    ArchRProj = projL,
+    peakAnnotation = "Motif",
+    cutOff = "FDR <= 0.1 & Log2FC >= 0.5"
+  )
+heatmapEM <- plotEnrichHeatmap(enrichMotifs, n = 15, transpose = TRUE)
+
+enrichMotifs <- peakAnnoEnrichment(
+    seMarker = markersPeaks[,c("Cholangiocyte","HSC_1","Kupffer","Kupffer_1","LSEC")],
+    ArchRProj = projL,
+    peakAnnotation = "Motif",
+    cutOff = "FDR <= 0.1 & Log2FC >= 0.5"
+  )
+heatmapEM <- plotEnrichHeatmap(enrichMotifs, n = 15, transpose = TRUE)
+
+
+#### Differential accessibility genes plot
+pbmc.markers <- markerall[markerall$cluster%in%paste0("Hep",seq(1:9)),c("FDR","Log2FC","cluster","name","FDR")]
+names(pbmc.markers) <- c("p_val","avg_log2FC","cluster","gene","p_val_adj")
+options(repr.plot.width=12,repr.plot.height=8)
+p3.2 <- jjVolcano(diffData = pbmc.markers,aesCol = c('purple','#66c2a5'),pSize = 0.05,fontface = 'italic',
+                  tile.col =c('#A281BD','#D3C599','#4E96C4','#FDA03A','#A6CEE3','#F88519','#A9D88C','#D6A5A3','#EE5656'),
+          myMarkers = c("Pdgfa","Usp43","Chka","Cdc20","EVI5","Otud7b",
+                        "Ddr1","Tm4sf4"
+                        ))
+p3.2
+
+##GO enrichment
+#差异开放与差异预测表达的overlap
+#topGO富集方法 top10 pvalue排序
+#allgenes矩阵中的所有基因
+#intersect(markerGSMall$name[markerGSMall$cluster==cts],markerGIMall$name[markerGIMall$cluster==cts])
+for (cts in c(paste0("Hep",seq(1:9)))){
+    print(cts)
+    allGenes <- avgPctMat$feature
+    pos_top_genes <- intersect(markerGSMall$name[markerGSMall$cluster==cts],markerGIMall$name[markerGIMall$cluster==cts])
+    geneList <- factor(as.integer(allGenes %in% pos_top_genes))
+    names(geneList) <- allGenes
+    # Create topGOdata object
+    GOdata <- suppressMessages(new(
+        "topGOdata",
+        ontology = "BP",
+        allGenes = geneList,
+        annot = annFUN.org, mapping = "org.Mm.eg.db", ID = "symbol",
+        nodeSize = 5
+        ))
+    GOresult <- suppressMessages(runTest(GOdata, algorithm="weight01", statistic="fisher"))
+    topNodes=50
+    upGO <- GenTable(GOdata, pvalue=GOresult, topNodes=topNodes, numChar=1000)
+    upGO <- upGO[order(as.numeric(upGO$pvalue), decreasing=FALSE),]
+    upGO$log2FoldEnrichment <- log2(upGO$Significant / upGO$Expected)
+    upGO <- upGO[upGO$log2FoldEnrichment>0,]
+    upGO$threshPval <- ifelse(upGO$pvalue == "< 1e-30", 1e-30, as.numeric(upGO$pvalue))
+    upGO$log10pval <- -log10(upGO$threshPval)
+    #options(repr.plot.width=10,repr.plot.height=6)
+    upGO_top20 <- upGO[1:10,]
+    
+    #指定绘图顺序（转换为因子）：
+    upGO_top20$pathway <- factor(upGO_top20$Term, levels = rev(upGO_top20$Term))
+    #Top20富集数目条形图：
+    mytheme <- theme(axis.title = element_text(size = 13),
+                     axis.text = element_text(size = 11),
+                     plot.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+                     legend.title = element_text(size = 13),
+                     legend.text = element_text(size = 11),
+                     axis.text.x = element_text(color = "black"),
+                     axis.text.y = element_text(color = "black")) #自定义主题
+    
+    p1.1 <- ggplot(data = upGO_top20,
+                aes(x =log10pval , y = pathway, fill = log2FoldEnrichment))+
+      geom_bar(stat = "identity", width = 0.8) +
+      scale_fill_distiller(palette = "GnBu",direction = 1) +
+      labs(x = "log10pval",
+           y = "pathway",
+           title = paste0(cts," overlap-gene topGO enrichment barplot")) +
+      theme_few() +
+      mytheme
+    pdf(paste0("/jdfssz3/ST_STOMICS/P22Z10200N0661/wuyan/13.Hepatectomy/08.Plot/01.Figure2_topGO_enrichment_result/",cts,"_overlap-gene_topGO_enrichment_barplot.pdf"),height = 6,width = 12)
+    print(p1.1)
+    dev.off()
+    write.csv(upGO,paste0("/jdfssz3/ST_STOMICS/P22Z10200N0661/wuyan/13.Hepatectomy/08.Plot/01.Figure2_topGO_enrichment_result/",cts,"_overlap-gene_topGO_enrichment_result.csv"),quote=FALSE)
+    
+}
+
+
+
+###Add module Score analysis
+GSM <- readRDS("/jdfssz3/ST_STOMICS/P22Z10200N0661/wuyan/13.Hepatectomy/02.Project.raw.data/02.CallPeak/Liver12_1009_subset_GeneScoreMatrix.rds")
+GSM_mat <- assays(GSM)$GeneScoreMatrix
+rownames(GSM_mat) <- rowData(GSM)$name
+
+metadata <- as.data.frame(GSM@colData)
+
+
+obj <- CreateSeuratObject(counts = GSM_mat, project = "PHx_liver", min.cells = 0, min.features = 0)
+
+obj@meta.data <- metadata
+
+DDCGSmarker <- readRDS("/jdfssz3/ST_STOMICS/P22Z10200N0661/wuyan/13.Hepatectomy/14.DDC_marker/DDC_proj_FineClust_peaks_GeneScoreMatrix_BroadClust_new_marker.rds")
+ddcmarkerGSList <- getMarkers(DDCGSmarker, cutOff = "FDR <= 0.01 & Log2FC >= 1")
+
+DDC_LPLC_marker <- ddcmarkerGSList$LPLC$name
+
+featuresets <- list("DDC_LPLC_marker" = DDC_LPLC_marker)
+
+
+for (listname in names(featuresets)) {
+  print(listname)
+  print(featuresets[[listname]])
+  tmp <- featuresets[[listname]][featuresets[[listname]]%in%rownames(obj)]
+  obj <- AddModuleScore(
+    object = obj,
+    features = list(tmp),
+    ctrl = 100,
+    name = listname
+  )
+}
+
+metadata2 <- as.data.frame(obj@meta.data)
+
+###Identification of Positiver regulators
+corGSM_MM <- correlateMatrices(
+    ArchRProj = atac_proj,
+    useMatrix1 = "GeneScoreMatrix",
+    useMatrix2 = "MotifMatrix",
+    reducedDims = "Harmony"
+)
+
+corGIM_MM <- correlateMatrices(
+    ArchRProj = atac_proj,
+    useMatrix1 = "GeneIntegrationMatrix",
+    useMatrix2 = "MotifMatrix",
+    reducedDims = "Harmony"
+)
+df$TF[1:40]
+
+topdf_cor <- as.data.frame(corGSM_MM[corGSM_MM$MotifMatrix_name%in%topdf$TF,])
+rownames(topdf_cor) <- topdf_cor$MotifMatrix_name
+options(repr.plot.width=3.5,repr.plot.height=10)
+segment_df <- data.frame(x = 0,y = seq(1:40),xend = topdf_cor[rev(df$TF[1:40]),"cor"],yend = seq(1:40))
+p2.2 <- ggplot(topdf_cor)+geom_point(aes(cor,MotifMatrix_name),size=2.5)+geom_segment(segment_df,mapping = aes(x = x, y = y, xend = xend, yend = yend),size = 0.8,color = "#2f90b9")+theme_few()+
+geom_vline(aes(xintercept=0), colour="black")+geom_vline(aes(xintercept=-0.4), colour="black",linetype="dashed")+geom_vline(aes(xintercept=0.4), colour="black",linetype="dashed")+
+theme(axis.text.x = element_text(color = "black"),
+     axis.text.y = element_text(color = "black"))+ggtitle("GSM")
+p2.2
+
